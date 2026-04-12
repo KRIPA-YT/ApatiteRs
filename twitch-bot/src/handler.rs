@@ -1,6 +1,6 @@
-use apatite_api::{Bot, Command, CommandRegistrar, Context};
+use apatite_api::{Bot, Command, CommandError, CommandRegistrar, Context};
 use async_trait::async_trait;
-use std::{collections::HashMap, error::Error};
+use std::collections::HashMap;
 
 pub struct CommandHandler {
     commands: HashMap<String, Box<dyn Command>>,
@@ -30,7 +30,7 @@ impl apatite_api::CommandHandler for CommandHandler {
         msg: &str,
         user: String,
         bot: &mut dyn Bot,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), CommandError> {
         let mut parts = msg[1..].split_whitespace();
         let name = parts.next().expect("NO NAME PANICCC");
         let args = parts.map(|s| s.to_string()).collect();
@@ -42,7 +42,7 @@ impl apatite_api::CommandHandler for CommandHandler {
                 message: msg.into(),
                 args,
                 commands: &self.commands,
-                bot: bot,
+                bot,
             })
             .await
     }
@@ -59,7 +59,7 @@ impl Command for HelpCommand {
         "Lists all commands"
     }
 
-    async fn execute(&self, ctx: &mut Context) -> Result<(), Box<dyn Error>> {
+    async fn execute(&self, ctx: &mut Context) -> Result<(), CommandError> {
         let help_text = ctx
             .commands
             .values()
@@ -67,7 +67,8 @@ impl Command for HelpCommand {
             .collect::<Vec<_>>()
             .join(" | ");
 
-        ctx.bot.twitch_api().send_message(&help_text).await
+        ctx.bot.twitch_api().send_message(&help_text).await?;
+        Ok(())
     }
 }
 
@@ -82,8 +83,9 @@ impl Command for StopCommand {
         "Stops the bot"
     }
 
-    async fn execute(&self, ctx: &mut Context) -> Result<(), Box<dyn Error>> {
+    async fn execute(&self, ctx: &mut Context) -> Result<(), CommandError> {
         ctx.bot.twitch_api().send_message("Stopping...").await?;
-        ctx.bot.stop().await
+        ctx.bot.stop().await?;
+        Ok(())
     }
 }

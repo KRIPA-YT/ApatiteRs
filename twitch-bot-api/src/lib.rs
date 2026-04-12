@@ -1,9 +1,10 @@
 pub mod twitch_api;
 use std::{collections::HashMap, error::Error};
+use thiserror::Error;
 
 use async_trait::async_trait;
 
-use crate::twitch_api::TwitchAPI;
+use crate::twitch_api::{TwitchAPI, TwitchAPIError};
 
 pub const API_VERSION: u32 = 1;
 
@@ -15,11 +16,19 @@ pub struct Context<'ctx> {
     pub bot: &'ctx mut dyn Bot,
 }
 
+#[derive(Error, Debug)]
+pub enum CommandError {
+    #[error("TwitchAPIError: {0}")]
+    TwitchAPIError(#[from] TwitchAPIError),
+    #[error("Other error: {0}")]
+    Other(#[from] Box<dyn std::error::Error>),
+}
+
 #[async_trait]
 pub trait Command: Send + Sync {
     fn name(&self) -> &'static str;
     fn help(&self) -> &'static str;
-    async fn execute(&self, ctx: &mut Context) -> Result<(), Box<dyn Error>>;
+    async fn execute(&self, ctx: &mut Context) -> Result<(), CommandError>;
 }
 
 // What plugins must export
@@ -39,7 +48,7 @@ pub trait CommandHandler: Send + Sync {
         msg: &str,
         user: String,
         bot: &mut dyn Bot,
-    ) -> Result<(), Box<dyn Error>>;
+    ) -> Result<(), CommandError>;
 }
 
 #[async_trait]

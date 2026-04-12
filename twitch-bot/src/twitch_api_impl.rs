@@ -1,12 +1,11 @@
 mod auth;
 
-use std::error::Error;
-
 use crate::{
     config::AuthConfig,
     twitch_eventsub::{self, EventSubSocket},
     user_cache::{UserCache, load_user_cache, save_user_cache},
 };
+use apatite_api::twitch_api::TwitchAPIError;
 use async_trait::async_trait;
 use reqwest::{Client, RequestBuilder};
 use serde_json::{Value, json};
@@ -24,7 +23,7 @@ impl TwitchAPI {
         auth_config: &AuthConfig,
         broadcaster_id: String,
     ) -> Result<(EventSubSocket, TwitchAPI), ()> {
-        // TODO Error types
+        // TODO: Error types
         let token = auth::authenticate(&auth_config).await;
         let (ws, session_id) = twitch_eventsub::connect_eventsub()
             .await
@@ -62,7 +61,7 @@ impl TwitchAPI {
 
 #[async_trait]
 impl apatite_api::twitch_api::TwitchAPI for TwitchAPI {
-    async fn send_message(&self, message: &str) -> Result<(), Box<dyn Error>> {
+    async fn send_message(&self, message: &str) -> Result<(), TwitchAPIError> {
         // TODO: Error types
         // TODO: Queue for ratelimiting
         let body = json!(
@@ -77,7 +76,8 @@ impl apatite_api::twitch_api::TwitchAPI for TwitchAPI {
             .twitch_post_request("chat/messages")
             .json(&body)
             .send()
-            .await?;
+            .await
+            .expect("Error while sending message!");
 
         if !res.status().is_success() {
             todo!("Implement handler for non-success status code");
@@ -120,7 +120,7 @@ impl apatite_api::twitch_api::TwitchAPI for TwitchAPI {
         r#type: &str,
         version: &str,
         condition: serde_json::Value,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), TwitchAPIError> {
         let body = json!({
             "type": r#type,
             "version": version,
@@ -135,7 +135,7 @@ impl apatite_api::twitch_api::TwitchAPI for TwitchAPI {
             .json(&body)
             .send()
             .await
-            .map(|_| ())
-            .map_err(|e| e.into())
+            .expect("Couldn't subscribe to event!");
+        Ok(())
     }
 }

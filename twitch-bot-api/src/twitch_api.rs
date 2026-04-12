@@ -1,10 +1,13 @@
 use async_trait::async_trait;
 use serde_json;
-use std::error::Error;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum TwitchAPIError {}
 
 #[async_trait]
 pub trait TwitchAPI: Send + Sync {
-    async fn send_message(&self, message: &str) -> Result<(), Box<dyn Error>>;
+    async fn send_message(&self, message: &str) -> Result<(), TwitchAPIError>;
 
     async fn get_user_id_cached(&self, username: &str) -> Option<String>;
 
@@ -13,5 +16,5 @@ pub trait TwitchAPI: Send + Sync {
         r#type: &str,
         version: &str,
         condition: serde_json::Value,
-    ) -> Result<(), Box<dyn Error>>;
+    ) -> Result<(), TwitchAPIError>;
 }

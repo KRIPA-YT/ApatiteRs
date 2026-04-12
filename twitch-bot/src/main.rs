@@ -1,3 +1,5 @@
+// #![deny(clippy::expect_used, clippy::unwrap_used, clippy::todo)]
+
 mod config;
 mod handler;
 mod plugin_loader;
@@ -5,7 +7,10 @@ mod twitch_api_impl;
 mod twitch_eventsub;
 mod user_cache;
 
-use apatite_api::{Bot, CommandHandler, twitch_api::TwitchAPI as _};
+use apatite_api::{
+    Bot, CommandHandler,
+    twitch_api::{TwitchAPI as _, TwitchAPIError},
+};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
@@ -120,7 +125,7 @@ async fn main() {
 async fn subscribe_to_events(
     twitch_api: &TwitchAPI,
     bot_config: &BotConfig,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), TwitchAPIError> {
     twitch_api
         .subscribe_to_event(
             "channel.chat.message",
