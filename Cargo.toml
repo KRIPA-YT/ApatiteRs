@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "twitch-bot-api",
+    "twitch-bot",
+#    "plugins/ping_plugin"
+]
+resolver = "2"

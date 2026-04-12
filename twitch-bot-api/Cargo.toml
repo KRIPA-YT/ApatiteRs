@@ -1,0 +1,9 @@
+[package]
+name = "apatite-api"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-trait = "0.1"
+serde_json = "1.0.149"
+serde = { version = "1.0.228", features = ["derive"] }
