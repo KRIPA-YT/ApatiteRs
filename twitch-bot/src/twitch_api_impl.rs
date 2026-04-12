@@ -24,7 +24,7 @@ impl TwitchAPI {
         broadcaster_id: String,
     ) -> Result<(EventSubSocket, TwitchAPI), ()> {
         // TODO: Error types
-        let token = auth::authenticate(&auth_config).await;
+        let token = auth::authenticate(auth_config).await;
         let (ws, session_id) = twitch_eventsub::connect_eventsub()
             .await
             .expect("Couldn't connect to eventsub!");

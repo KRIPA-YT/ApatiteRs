@@ -80,7 +80,7 @@ impl Apatite {
 
                             println!("[{}] {}", user, msg);
 
-                            if user_id != &self.config.auth.user_id && msg.starts_with("!") {
+                            if user_id != self.config.auth.user_id && msg.starts_with("!") {
                                 // TODO: graceful handling
                                 self.handler
                                     .handle(msg, user.to_string(), &mut self.state)

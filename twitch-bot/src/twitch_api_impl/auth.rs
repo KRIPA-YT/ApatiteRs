@@ -1,7 +1,9 @@
 use serde::Deserialize;
 use serde::Serialize;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::BufRead as _;
+use std::io::BufReader;
+use std::io::Write;
 use std::net::TcpListener;
 
 use crate::config::AuthConfig;
@@ -17,20 +19,20 @@ pub struct Token {
 
 pub async fn authenticate(config: &AuthConfig) -> Token {
     // Try load existing token
-    if let Ok(data) = fs::read_to_string("token.json") {
-        if let Ok(token) = serde_json::from_str::<Token>(&data) {
-            println!("Loaded saved token");
+    if let Ok(data) = fs::read_to_string("token.json")
+        && let Ok(token) = serde_json::from_str::<Token>(&data)
+    {
+        println!("Loaded saved token");
 
-            // Try refresh
-            if let Ok(new_token) = refresh_token(config, &token).await {
-                println!("Token refreshed");
-                save_token(&new_token);
-                return new_token;
-            }
-
-            println!("Using existing token (refresh failed)");
-            return token;
+        // Try refresh
+        if let Ok(new_token) = refresh_token(config, &token).await {
+            println!("Token refreshed");
+            save_token(&new_token);
+            return new_token;
         }
+
+        println!("Using existing token (refresh failed)");
+        return token;
     }
 
     // Otherwise: full OAuth flow
@@ -127,31 +129,36 @@ fn wait_for_callback() -> String {
     for stream in listener.incoming() {
         let mut stream = stream.unwrap();
 
-        let mut buffer = [0; 2048];
-        stream.read(&mut buffer).unwrap();
+        let buf_reader = BufReader::new(&stream);
 
-        let request = String::from_utf8_lossy(&buffer);
+        let request: Vec<_> = buf_reader
+            .lines()
+            .map(|result| result.unwrap())
+            .take_while(|line| !line.is_empty())
+            .collect();
+        dbg!(&request);
 
-        if let Some(start) = request.find("GET /callback?code=") {
+        let status_line = request.first().unwrap();
+        if let Some(start) = status_line.find("GET /callback?code=") {
             let code_start = start + "GET /callback?code=".len();
-            let code_end = request[code_start..]
+            let code_end = status_line[code_start..]
                 .find('&')
-                .or_else(|| request[code_start..].find(' '))
+                .or_else(|| status_line[code_start..].find(' '))
                 .unwrap();
 
-            let code = &request[code_start..code_start + code_end];
+            let code = &status_line[code_start..code_start + code_end];
 
             let response = "HTTP/1.1 200 OK\r\n\r\nYou can close this tab.";
             stream.write_all(response.as_bytes()).unwrap();
 
             return code.to_string();
-        } else if let Some(start) = request.find("GET /callback?error=") {
+        } else if let Some(start) = status_line.find("GET /callback?error=") {
             let error_start = start + "GET /callback?error=".len();
-            let error_end = request[error_start..]
+            let error_end = status_line[error_start..]
                 .find('&')
-                .or_else(|| request[error_start..].find(' '))
+                .or_else(|| status_line[error_start..].find(' '))
                 .unwrap();
-            let error = &request[error_start..error_start + error_end];
+            let error = &status_line[error_start..error_start + error_end];
 
             let response = "HTTP/1.1 200 OK\r\n\r\nError: .".to_owned() + error;
             stream.write_all(response.as_bytes()).unwrap();
