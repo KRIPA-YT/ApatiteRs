@@ -1,5 +1,7 @@
 mod auth;
 
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 use crate::{
     config::AuthConfig,
     twitch_eventsub::{self, EventSubSocket},
@@ -7,8 +9,56 @@ use crate::{
 };
 use apatite_api::twitch_api::TwitchAPIError;
 use async_trait::async_trait;
-use reqwest::{Client, RequestBuilder};
+use reqwest::{Client, Request, RequestBuilder, Response, StatusCode};
 use serde_json::{Value, json};
+
+pub struct TwitchAPIRequest {
+    pub request: Request,
+    pub ratelimit_resend: bool,
+}
+
+impl TwitchAPIRequest {
+    pub fn from_request(request: Request, ratelimit_resend: bool) -> Self {
+        Self {
+            request,
+            ratelimit_resend,
+        }
+    }
+
+    pub async fn send(&mut self) -> Result<Response, TwitchAPIError> {
+        let res = Client::new()
+            .execute(self.request.try_clone().unwrap())
+            .await
+            .map_err(|_| TwitchAPIError::RequestError)?;
+        if res.status().is_success() {
+            return Ok(res);
+        }
+        if res.status() == StatusCode::TOO_MANY_REQUESTS {
+            if !self.ratelimit_resend {
+                return Err(TwitchAPIError::RateLimited);
+            }
+            let ratelimit_reset = res.headers()["ratelimit-reset"]
+                .to_str()
+                .map_err(|_| TwitchAPIError::ResponseError)?;
+            let target = UNIX_EPOCH
+                + Duration::from_secs(
+                    ratelimit_reset
+                        .parse()
+                        .map_err(|_| TwitchAPIError::ParseError)?,
+                );
+            let now = SystemTime::now();
+
+            let duration = match target.duration_since(now) {
+                Ok(dur) => dur,
+                Err(_) => Duration::from_secs(0), // already in the past
+            };
+
+            tokio::time::sleep(duration).await;
+            return Box::pin(self.send()).await;
+        }
+        Err(TwitchAPIError::RequestError)
+    }
+}
 
 pub struct TwitchAPI {
     token: String,
@@ -37,7 +87,7 @@ impl TwitchAPI {
         ))
     }
 
-    fn twitch_get_request(&self, endpoint: &str) -> RequestBuilder {
+    fn get(&self, endpoint: &str) -> RequestBuilder {
         let client = Client::new();
 
         client
@@ -46,7 +96,7 @@ impl TwitchAPI {
             .header("Client-Id", &self.client_id)
     }
 
-    fn twitch_post_request(&self, endpoint: &str) -> RequestBuilder {
+    fn post(&self, endpoint: &str) -> RequestBuilder {
         let client = Client::new();
 
         client
@@ -61,7 +111,6 @@ const IDENTICAL_MSG_CHAR: char = '\u{34f}';
 #[async_trait]
 impl apatite_api::twitch_api::TwitchAPI for TwitchAPI {
     async fn send_message(&self, message: &str) -> Result<(), TwitchAPIError> {
-        // TODO: Queue for ratelimiting
         let body = json!(
             {
                 "broadcaster_id": &self.broadcaster_id,
@@ -70,33 +119,29 @@ impl apatite_api::twitch_api::TwitchAPI for TwitchAPI {
             }
         );
 
-        let res = self
-            .twitch_post_request("chat/messages")
-            .json(&body)
+        let req = self.post("chat/messages").json(&body);
+        let res = TwitchAPIRequest::from_request(req.build().unwrap(), true)
             .send()
-            .await
-            .map_err(|_| TwitchAPIError::RequestError)?;
-
-        if !res.status().is_success() {
-            println!("StatusCode not 200: {}", res.status());
-            return Err(TwitchAPIError::RequestError);
-        }
+            .await?;
 
         let json: Value = res.json().await.map_err(|_| TwitchAPIError::ParseError)?;
 
-        let message_sent = json["data"]["is_sent"]
+        let message_sent = json["data"][0]["is_sent"]
             .as_bool()
             .ok_or(TwitchAPIError::ParseError)?;
-        let msg_duplicate = json["data"]["drop_reason"]["code"]
-            .as_str()
-            .ok_or(TwitchAPIError::ParseError)?
-            == "msg_deplicate";
 
-        // This does not work because we're getting 429 rate limited...
         if !message_sent {
-            if !msg_duplicate {
+            let drop_code = json["data"][0]["drop_reason"]["code"]
+                .as_str()
+                .unwrap_or("");
+            if drop_code == "msg_rejected" {
+                return Err(TwitchAPIError::PermissionError);
+            }
+
+            if drop_code != "msg_duplicate" {
                 return Err(TwitchAPIError::ResponseError);
             }
+
             let message = if message.ends_with(IDENTICAL_MSG_CHAR) {
                 message.trim_end_matches(IDENTICAL_MSG_CHAR).to_string()
             } else {
@@ -104,6 +149,7 @@ impl apatite_api::twitch_api::TwitchAPI for TwitchAPI {
                 s.push(IDENTICAL_MSG_CHAR);
                 s
             };
+            println!("Recalling...");
             self.send_message(&message).await?;
         }
 
@@ -117,9 +163,8 @@ impl apatite_api::twitch_api::TwitchAPI for TwitchAPI {
             return Some(cache.user_id);
         }
 
-        let res = self
-            .twitch_get_request("users")
-            .query(&[("login", username)])
+        let req = self.get("users").query(&[("login", username)]);
+        let res = TwitchAPIRequest::from_request(req.build().unwrap(), true)
             .send()
             .await
             .ok()?;
@@ -156,15 +201,11 @@ impl apatite_api::twitch_api::TwitchAPI for TwitchAPI {
             }
         });
 
-        let res = self
-            .twitch_post_request("eventsub/subscriptions")
-            .json(&body)
+        let req = self.post("eventsub/subscriptions").json(&body);
+        let _ = TwitchAPIRequest::from_request(req.build().unwrap(), true)
             .send()
             .await
             .map_err(|_| TwitchAPIError::RequestError)?;
-        if !res.status().is_success() {
-            return Err(TwitchAPIError::RequestError);
-        }
         Ok(())
     }
 }

@@ -1,5 +1,6 @@
 use async_trait::async_trait;
-use serde_json;
+use serde::Serialize;
+use serde_json::{self};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -12,6 +13,10 @@ pub enum TwitchAPIError {
     ResponseError,
     #[error("Error while parsing response")]
     ParseError,
+    #[error("Rate limited")]
+    RateLimited,
+    #[error("Insufficient permissions")]
+    PermissionError,
 }
 
 #[derive(Error, Debug)]
@@ -36,4 +41,11 @@ pub trait TwitchAPI: Send + Sync {
         version: &str,
         condition: serde_json::Value,
     ) -> Result<(), TwitchAPIError>;
+}
+
+#[async_trait]
+pub trait TwitchAPIRequest: Send + Sync {
+    async fn send();
+    fn query<T: Serialize + ?Sized>(self, query: &T) -> Self;
+    fn json<T: Serialize + ?Sized>(self, json: &T) -> Self;
 }

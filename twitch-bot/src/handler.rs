@@ -37,8 +37,6 @@ impl apatite_api::CommandHandler for CommandHandler {
             Some(name) => name,
         };
         let args: Vec<_> = parts.collect();
-        dbg!(&name);
-        dbg!(&args);
 
         match self.commands.get(name) {
             Some(command) => {
@@ -77,7 +75,6 @@ impl Command for HelpCommand {
     }
 
     async fn execute(&self, ctx: &mut Context) -> Result<(), CommandError> {
-        println!("Trying to execute !help");
         let help_text = ctx
             .commands
             .values()
