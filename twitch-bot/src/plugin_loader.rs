@@ -1,3 +1,6 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+// TODO: Clean of unwrap and expect
+
 use crate::handler::CommandHandler;
 use apatite_api::{API_VERSION, PluginDeclaration};
 use libloading::{Library, Symbol};
@@ -24,7 +27,7 @@ pub fn load_plugins(handler: &mut CommandHandler) {
 
                 let plugin = &**decl;
 
-                // 🔥 VERSION CHECK
+                // VERSION CHECK
                 if plugin.api_version != API_VERSION {
                     eprintln!(
                         "Skipping plugin {:?}: API mismatch (plugin={}, bot={})",

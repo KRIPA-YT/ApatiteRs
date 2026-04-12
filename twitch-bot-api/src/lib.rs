@@ -11,7 +11,7 @@ pub const API_VERSION: u32 = 1;
 pub struct Context<'ctx> {
     pub user: String,
     pub message: String,
-    pub args: Vec<String>,
+    pub args: &'ctx [&'ctx str],
     pub commands: &'ctx HashMap<String, Box<dyn Command>>,
     pub bot: &'ctx mut dyn Bot,
 }

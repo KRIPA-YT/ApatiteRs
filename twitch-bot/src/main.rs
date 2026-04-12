@@ -1,4 +1,4 @@
-// #![deny(clippy::expect_used, clippy::unwrap_used, clippy::todo)]
+#![deny(clippy::expect_used, clippy::unwrap_used, clippy::todo)]
 
 mod config;
 mod handler;
@@ -35,17 +35,15 @@ pub struct ApatiteState {
 }
 
 impl Apatite {
-    async fn new(config: Config) -> Self {
+    async fn new(config: Config) -> Result<Self, TwitchAPIError> {
         let mut handler = handler::CommandHandler::new();
         plugin_loader::load_plugins(&mut handler);
 
         let (web_socket, twitch_api) =
-            TwitchAPI::connect(&config.auth, config.bot.channel_id.to_owned())
-                .await
-                .expect("Couldn't connect to twitch!");
+            TwitchAPI::connect(&config.auth, config.bot.channel_id.to_owned()).await?;
 
-        subscribe_to_events(&twitch_api, &config.bot).await.unwrap();
-        Self {
+        subscribe_to_events(&twitch_api, &config.bot).await?;
+        Ok(Self {
             config,
             state: ApatiteState {
                 running: true,
@@ -53,17 +51,32 @@ impl Apatite {
             },
             web_socket,
             handler: Box::new(handler),
-        }
+        })
     }
 
     async fn run(&mut self) {
         while self.state.running
             && let Some(msg) = self.web_socket.next().await
         {
-            let msg = msg.unwrap();
+            let msg = match msg {
+                Ok(msg) => msg,
+                Err(_) => continue,
+            };
 
             if msg.is_text() {
-                let data: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+                let data: Value = match serde_json::from_str(match msg.to_text() {
+                    Ok(text) => text,
+                    Err(_) => {
+                        println!("Couldn't convert websocket message to text!");
+                        continue;
+                    }
+                }) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        println!("Couldn't parse to json!");
+                        continue;
+                    }
+                };
 
                 match data["metadata"]["message_type"].as_str() {
                     Some("notification") => {
@@ -81,11 +94,23 @@ impl Apatite {
                             println!("[{}] {}", user, msg);
 
                             if user_id != self.config.auth.user_id && msg.starts_with("!") {
-                                // TODO: graceful handling
-                                self.handler
+                                match self
+                                    .handler
                                     .handle(msg, user.to_string(), &mut self.state)
                                     .await
-                                    .expect("Error while executing command!");
+                                {
+                                    Ok(_) => (),
+                                    Err(err) => {
+                                        println!("Error: {:?}", err);
+                                        let _ = self
+                                            .state
+                                            .twitch_api
+                                            .send_message(
+                                                "An error occured while executing this command!",
+                                            )
+                                            .await;
+                                    }
+                                }
                             }
                         }
                     }
@@ -112,11 +137,22 @@ impl Bot for ApatiteState {
 }
 
 #[tokio::main]
+#[allow(clippy::expect_used)]
 async fn main() {
-    let config_str = fs::read_to_string("config.toml").unwrap();
-    let config: Config = toml::from_str(&config_str).unwrap();
+    let config_str = match fs::read_to_string("config.toml") {
+        Ok(config_str) => config_str,
+        Err(_) => {
+            fs::write(
+                "config.toml",
+                toml::to_string_pretty(&Config::default()).expect("Couldn't write config.toml"),
+            )
+            .expect("Couldn't write config.toml");
+            return;
+        }
+    };
+    let config: Config = toml::from_str(&config_str).expect("Couldn't parse config.toml");
 
-    let mut apatite = Apatite::new(config).await;
+    let mut apatite = Apatite::new(config).await.expect("Couldn't create bot!");
     apatite.run().await;
 
     println!("Exiting");

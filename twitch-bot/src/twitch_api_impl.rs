@@ -22,12 +22,9 @@ impl TwitchAPI {
     pub async fn connect(
         auth_config: &AuthConfig,
         broadcaster_id: String,
-    ) -> Result<(EventSubSocket, TwitchAPI), ()> {
-        // TODO: Error types
-        let token = auth::authenticate(auth_config).await;
-        let (ws, session_id) = twitch_eventsub::connect_eventsub()
-            .await
-            .expect("Couldn't connect to eventsub!");
+    ) -> Result<(EventSubSocket, TwitchAPI), TwitchAPIError> {
+        let token = auth::authenticate(auth_config).await?;
+        let (ws, session_id) = twitch_eventsub::connect_eventsub().await?;
         Ok((
             ws,
             TwitchAPI {
@@ -59,10 +56,11 @@ impl TwitchAPI {
     }
 }
 
+const IDENTICAL_MSG_CHAR: char = '\u{34f}';
+
 #[async_trait]
 impl apatite_api::twitch_api::TwitchAPI for TwitchAPI {
     async fn send_message(&self, message: &str) -> Result<(), TwitchAPIError> {
-        // TODO: Error types
         // TODO: Queue for ratelimiting
         let body = json!(
             {
@@ -77,12 +75,38 @@ impl apatite_api::twitch_api::TwitchAPI for TwitchAPI {
             .json(&body)
             .send()
             .await
-            .expect("Error while sending message!");
+            .map_err(|_| TwitchAPIError::RequestError)?;
 
         if !res.status().is_success() {
-            todo!("Implement handler for non-success status code");
+            println!("StatusCode not 200: {}", res.status());
+            return Err(TwitchAPIError::RequestError);
         }
-        println!("Sent message: {}", message);
+
+        let json: Value = res.json().await.map_err(|_| TwitchAPIError::ParseError)?;
+
+        let message_sent = json["data"]["is_sent"]
+            .as_bool()
+            .ok_or(TwitchAPIError::ParseError)?;
+        let msg_duplicate = json["data"]["drop_reason"]["code"]
+            .as_str()
+            .ok_or(TwitchAPIError::ParseError)?
+            == "msg_deplicate";
+
+        // This does not work because we're getting 429 rate limited...
+        if !message_sent {
+            if !msg_duplicate {
+                return Err(TwitchAPIError::ResponseError);
+            }
+            let message = if message.ends_with(IDENTICAL_MSG_CHAR) {
+                message.trim_end_matches(IDENTICAL_MSG_CHAR).to_string()
+            } else {
+                let mut s = message.to_string();
+                s.push(IDENTICAL_MSG_CHAR);
+                s
+            };
+            self.send_message(&message).await?;
+        }
+
         Ok(())
     }
 
@@ -92,8 +116,6 @@ impl apatite_api::twitch_api::TwitchAPI for TwitchAPI {
             println!("Using cached user_id");
             return Some(cache.user_id);
         }
-
-        // Fetch from Twitch API
 
         let res = self
             .twitch_get_request("users")
@@ -107,10 +129,13 @@ impl apatite_api::twitch_api::TwitchAPI for TwitchAPI {
         let user_id = json["data"].get(0)?.get("id")?.as_str()?.to_string();
 
         // Save cache as TOML
-        save_user_cache(&UserCache {
+        match save_user_cache(&UserCache {
             user_id: user_id.clone(),
             username: username.to_string(),
-        });
+        }) {
+            Ok(_) => (),
+            Err(_) => println!("Couldn't save user cache!"),
+        }
 
         Some(user_id)
     }
@@ -131,11 +156,15 @@ impl apatite_api::twitch_api::TwitchAPI for TwitchAPI {
             }
         });
 
-        self.twitch_post_request("eventsub/subscriptions")
+        let res = self
+            .twitch_post_request("eventsub/subscriptions")
             .json(&body)
             .send()
             .await
-            .expect("Couldn't subscribe to event!");
+            .map_err(|_| TwitchAPIError::RequestError)?;
+        if !res.status().is_success() {
+            return Err(TwitchAPIError::RequestError);
+        }
         Ok(())
     }
 }

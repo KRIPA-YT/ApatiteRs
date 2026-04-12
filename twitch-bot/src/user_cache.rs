@@ -20,7 +20,8 @@ pub fn load_user_cache(username: &str) -> Option<UserCache> {
     }
 }
 
-pub fn save_user_cache(cache: &UserCache) {
-    let data = serde_json::to_string_pretty(cache).unwrap();
+pub fn save_user_cache(cache: &UserCache) -> Result<(), ()> {
+    let data = serde_json::to_string_pretty(cache).map_err(|_| ())?;
     let _ = fs::write(CACHE_FILE, data);
+    Ok(())
 }

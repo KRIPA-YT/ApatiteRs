@@ -1,3 +1,4 @@
+use apatite_api::twitch_api::AuthError;
 use serde::Deserialize;
 use serde::Serialize;
 use std::fs;
@@ -17,7 +18,7 @@ pub struct Token {
 
 // ======================= PUBLIC ENTRY =======================
 
-pub async fn authenticate(config: &AuthConfig) -> Token {
+pub async fn authenticate(config: &AuthConfig) -> Result<Token, AuthError> {
     // Try load existing token
     if let Ok(data) = fs::read_to_string("token.json")
         && let Ok(token) = serde_json::from_str::<Token>(&data)
@@ -27,12 +28,12 @@ pub async fn authenticate(config: &AuthConfig) -> Token {
         // Try refresh
         if let Ok(new_token) = refresh_token(config, &token).await {
             println!("Token refreshed");
-            save_token(&new_token);
-            return new_token;
+            save_token(&new_token)?;
+            return Ok(new_token);
         }
 
         println!("Using existing token (refresh failed)");
-        return token;
+        return Ok(token);
     }
 
     // Otherwise: full OAuth flow
@@ -41,7 +42,7 @@ pub async fn authenticate(config: &AuthConfig) -> Token {
 
 // ======================= OAUTH FLOW =======================
 
-async fn oauth_flow(config: &AuthConfig) -> Token {
+async fn oauth_flow(config: &AuthConfig) -> Result<Token, AuthError> {
     println!("Starting OAuth flow...");
 
     let scopes = "user:read:email+channel:bot+user:read:chat+user:write:chat+user:bot";
@@ -52,7 +53,7 @@ async fn oauth_flow(config: &AuthConfig) -> Token {
         scopes,
     );
 
-    println!("\n👉 Open this URL in your browser:\n{}\n", auth_url);
+    println!("\nOpen this URL in your browser:\n{}\n", auth_url);
 
     let code = wait_for_callback();
 
@@ -71,27 +72,36 @@ async fn oauth_flow(config: &AuthConfig) -> Token {
         ])
         .send()
         .await
-        .unwrap()
+        .map_err(|_| AuthError::RequestError)?
         .json()
         .await
-        .unwrap();
+        .map_err(|_| AuthError::ParseError)?;
 
     let token = Token {
-        access_token: res["access_token"].as_str().unwrap().to_string(),
-        refresh_token: res["refresh_token"].as_str().unwrap().to_string(),
+        access_token: res["access_token"]
+            .as_str()
+            .ok_or(AuthError::ParseError)?
+            .to_string(),
+        refresh_token: res["refresh_token"]
+            .as_str()
+            .ok_or(AuthError::ParseError)?
+            .to_string(),
         expires_in: res["expires_in"].as_u64().unwrap_or(0),
     };
 
-    save_token(&token);
+    match save_token(&token) {
+        Ok(_) => (),
+        Err(_) => println!("Couldn't save token!"),
+    };
 
     println!("Authentication successful ");
 
-    token
+    Ok(token)
 }
 
 // ======================= REFRESH =======================
 
-pub async fn refresh_token(config: &AuthConfig, token: &Token) -> Result<Token, ()> {
+pub async fn refresh_token(config: &AuthConfig, token: &Token) -> Result<Token, AuthError> {
     let client = reqwest::Client::new();
 
     let res = client
@@ -104,23 +114,31 @@ pub async fn refresh_token(config: &AuthConfig, token: &Token) -> Result<Token, 
         ])
         .send()
         .await
-        .map_err(|_| ())?;
+        .map_err(|_| AuthError::RequestError)?;
 
     if !res.status().is_success() {
-        return Err(());
+        // TODO: What if rate limited? Just retry
+        return Err(AuthError::RequestError);
     }
 
-    let json: serde_json::Value = res.json().await.map_err(|_| ())?;
+    let json: serde_json::Value = res.json().await.map_err(|_| AuthError::ParseError)?;
 
     Ok(Token {
-        access_token: json["access_token"].as_str().unwrap().to_string(),
-        refresh_token: json["refresh_token"].as_str().unwrap().to_string(),
+        access_token: json["access_token"]
+            .as_str()
+            .ok_or(AuthError::ParseError)?
+            .to_string(),
+        refresh_token: json["refresh_token"]
+            .as_str()
+            .ok_or(AuthError::ParseError)?
+            .to_string(),
         expires_in: json["expires_in"].as_u64().unwrap_or(0),
     })
 }
 
 // ======================= CALLBACK SERVER =======================
 
+#[allow(clippy::expect_used, clippy::unwrap_used)]
 fn wait_for_callback() -> String {
     let listener = TcpListener::bind("127.0.0.1:3000").expect("Failed to bind to localhost:3000");
 
@@ -170,7 +188,8 @@ fn wait_for_callback() -> String {
 
 // ======================= UTIL =======================
 
-fn save_token(token: &Token) {
-    let data = serde_json::to_string_pretty(token).unwrap();
-    fs::write("token.json", data).unwrap();
+fn save_token(token: &Token) -> Result<(), AuthError> {
+    let data = serde_json::to_string_pretty(token).map_err(|_| AuthError::SaveError)?;
+    fs::write("token.json", data).map_err(|_| AuthError::SaveError)?;
+    Ok(())
 }
